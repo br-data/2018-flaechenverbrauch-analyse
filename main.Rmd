@@ -1,0 +1,502 @@
+---
+title: 'Analyse des Flächenverbrauchs in Bayern'
+author: "Oliver Schnuck (BR Data)"
+output:
+  html_document:
+    code_folding: hide
+    df_print: kable
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+fig_width: 12
+--- 
+    
+
+```{r, echo=FALSE}
+# CONFIG
+package_date <- "2018-01-01" # date of the CRAN snapshot that
+# the checkpoint package uses
+```
+
+<!-- ## Notes -->
+  
+<!-- This report was generated on `r Sys.time()`. -->
+
+<!-- ## Preparations -->
+
+```{r, echo=FALSE}
+detach_all_packages <- function() {
+  basic_packages_blank <-  c("stats",
+                             "graphics",
+                             "grDevices",
+                             "utils",
+                             "datasets",
+                             "methods",
+                             "base")
+  basic_packages <- paste("package:", basic_packages_blank, sep = "")
+
+  package_list <- search()[
+    regexpr("package:", search()) == 1]
+
+  package_list <- setdiff(package_list, basic_packages)
+
+  if (length(package_list) > 0)  for (package in package_list) {
+    detach(package, character.only = TRUE, unload = TRUE)
+    print(paste("package ", package, " detached", sep = ""))
+  }
+}
+
+detach_all_packages()
+```
+
+<!-- #### Define packages -->
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# from https://mran.revolutionanalytics.com/web/packages/checkpoint/vignettes/using-checkpoint-with-knitr.html
+# if you don't need a package, remove it from here (commenting is probably not sufficient)
+# tidyverse: see https://blog.rstudio.org/2016/09/15/tidyverse-1-0-0/
+cat("
+library(magrittr) # pipes
+library(stringr) # string manipulation
+library(readxl) # excel
+library(lintr) # code linting
+library(googlesheets) # googlesheets (replace with googlesheets4 asap)
+library(tidyverse) # ggplot2, dplyr, tidyr, readr, purrr, tibble
+library(plotly)",
+file = "manifest.R")
+```
+
+<!-- #### Install packages -->
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# if checkpoint is not yet installed, install it (for people using this
+# system for the first time)
+if (!require(checkpoint)) {
+  if (!require(devtools)) {
+    install.packages("devtools", repos = "http://cran.us.r-project.org")
+    require(devtools)
+  }
+  devtools::install_github("checkpoint",
+                           username = "RevolutionAnalytics",
+                           ref = "v0.3.2", # could be adapted later,
+                           # as of now (beginning of July 2017
+                           # this is the current release on CRAN)
+                           repos = "http://cran.us.r-project.org")
+  require(checkpoint)
+}
+
+if (!dir.exists("~/.checkpoint")) {
+  dir.create("~/.checkpoint")
+}
+
+# install packages for the specified CRAN snapshot date
+checkpoint(snapshotDate = package_date,
+           project = getwd(),
+           verbose = T,
+           scanForPackages = T,
+           use.knitr = F)
+rm(package_date)
+```
+
+<!-- #### Load packages -->
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+source("manifest.R")
+unlink("manifest.R")
+# sessionInfo()
+```
+
+<!-- #### Load additional scripts -->
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# if you want to outsource logic to other script files, see README for 
+# further information
+knitr::read_chunk("scripts/helper.R")
+source("scripts/helper.R")
+```
+
+<!-- #### Set global chunk options -->
+ 
+```{r, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, out.extra = 'style="padding-bottom: 20px"')
+```
+
+
+## Datenquellen
+
+#### Amtliche Flächenstatistik
+
+Im Rahmen der Flächenstatistik können von der Landesebene bis hinunter auf die Gemeindeebene die Flächennutzungsarten mit den dazugehörigen Flächengrößen ausgewiesen werden. Es wird die **tatsächliche Nutzung** der Flächen erhoben. Die Statistik basiert auf dem Amtlichen Liegenschaftskataster-Informationssystem (ALKIS). Digital ausgemessenen Flächen wird hier eine Nutzungsart zugeordnet, wie Wohnbaufläche, gewerblich genutzte Fläche oder Fläche gemischter Nutzung.
+
+* Berichtszeitraum/-zeitpunkt: 31. Dezember des Erhebungsjahres
+* Periodizität: Jährlich
+
+Eine Umstellung der Erhebungsmethodik brachte eine erhöhte Genauigkeit, aber auch einen Bruch in der Vergleichbarkeit mit früheren Jahren mit sich. Aus diesem Grund haben wir als Untersuchungszeitraum für die Datenauswertung die Entwicklung von Ende 2014 bis Ende 2016 gewählt.
+
+#### Fortschreibung des Bevölkerungsstandes 
+
+Veröffentlicht durch das Bayerische Landesamts für Statistik 
+
+#### Gewerbeflächenpotential
+
+Anbieter und Kommunen stellen im IHK-Portal potenzielle Gewerbeflächen ein. Das geschieht allerdings auf freiwilliger Basis: Die Auflistung erhebt also keinen Anspruch auf Vollständigkeit. Bei besonders begehrten Flächen bedienen sich Gemeinden möglicherweise dieses Instruments nicht. Zu beachten ist aber auch, dass ebenso Konversionsflächen verzeichnet sind. Das können zum Beispiel ehemalige Flächen der Bundeswehr sein, für die eine gewerbliche Nachnutzung erwünscht ist.
+
+## Einlesen der Daten
+
+```{r, echo=TRUE}
+population <- read_csv2("./input/12411-001.csv",
+  col_names = FALSE, col_types = cols(.default = col_character()),
+  comment = "#",
+  skip = 5,
+  locale = locale(encoding = "ISO-8859-14", decimal_mark = ",", grouping_mark = "."),
+  na = c("", ".", "/")
+)
+
+employees <- read_csv2("./input/13111-001.csv",
+  col_names = FALSE, col_types = cols(.default = col_character()),
+  comment = "#",
+  skip = 8,
+  locale = locale(encoding = "ISO-8859-14", decimal_mark = ",", grouping_mark = "."),
+  na = c("", ".", "/")
+)
+
+colnames(population) <- c("id", "name", 2011:2016)
+population[population == "-"] <- 0
+population <- population %>%
+  filter(name != "Gemeindefreie Gebiete")
+
+colnames(employees) <- c("id", "name", 2011:2016)
+employees[employees == "-"] <- 0
+employees <- employees %>%
+  filter(name != "Gemeindefreie Gebiete")
+
+area14_ALKIS <- import_area("33111-001r", 2014)
+area15_ALKIS <- import_area("33111-001r", 2015)
+area16_ALKIS <- import_area("33111-001r", 2016)
+
+area15_ADV <- import_area("33111-101r", 2015)
+area14_ADV <- import_area("33111-101r", 2014)
+area13_ADV <- import_area("33111-101r", 2013)
+area12_ADV <- import_area("33111-101r", 2012)
+area11_ADV <- import_area("33111-101r", 2011)
+
+area_ALKIS <- area14_ALKIS %>%
+  union(area15_ALKIS) %>% 
+  union(area16_ALKIS)
+area_ADV <- area11_ADV %>%
+  union(area12_ADV) %>%
+  union(area13_ADV) %>%
+  union(area14_ADV) %>%
+  union(area15_ADV)
+
+
+potential <- 10430.5
+potential_immediate <- 7799.5
+```
+
+## Säubern der Daten
+
+```{r, echo=TRUE}
+population <- population %>%
+  gather(`2011`, `2012`, `2013`, `2014`, `2015`, `2016`, key = "year", value = "population")
+
+population$year <- parse_integer(population$year)
+population$population <- parse_integer(population$population)
+
+employees <- employees %>%
+  gather(`2011`, `2012`, `2013`, `2014`, `2015`, `2016`, key = "year", value = "employees")
+
+employees$year <- parse_integer(employees$year)
+employees$employees <- parse_integer(employees$employees)
+```
+
+## Transformieren der  Daten
+
+```{r, echo=TRUE}
+start_year <- 2011
+mid_year <- 2014
+
+population <- population %>%
+  mutate(magnitude = cut(population, c(0, 1000, 5000, 10000, 20000, 100000, Inf), labels = c("dorf (<1k)", "markt (<5k)", "kleinstadt-kl (<10k)", "kleinstadt-gr (<20k)", "mittelstadt (<100k)", "großstadt (>100k)"))) %>%
+  mutate(municipality = str_length(id) >= 5 & gregexpr("\\(Lkr\\)", name) < 0) %>%
+  mutate(bezirk = str_sub(id, 1, 3))
+
+population1 <- population %>%
+  filter(year == start_year) %>%
+  select(id, name, municipality, bezirk, population)
+
+population2 <- population %>%
+  filter(year == mid_year) %>%
+  select(id, population)
+
+population3 <- population %>%
+  filter(year == 2016) %>%
+  select(id, population, magnitude)
+  
+growth_population <- population1 %>% inner_join(population2, by = "id") %>%
+  mutate(population_abs1 = population.y - population.x) %>%
+  mutate(population_rel1 = population_abs1 / population.x * 100) %>%
+  inner_join(population3, by = "id") %>%
+  mutate(population_abs2 = population - population.y) %>%
+  mutate(population_rel2 = population_abs2 / population.y * 100) %>%
+  mutate(population_abs = population_abs1 + population_abs2) %>%
+  mutate(population_rel = population_abs / population.x * 100)
+
+employees2 <- employees %>%
+  filter(year == mid_year) %>%
+  select(id, employees)
+
+employees3 <- employees %>%
+  filter(year == 2016) %>%
+  select(id, employees)
+
+growth_employees <- employees2 %>% inner_join(employees3, by = "id") %>%
+  mutate(employees_abs2 = employees.y - employees.x) %>%
+  mutate(employees_rel2 = employees_abs2 / employees.x * 100)
+
+area_ADV <- area_ADV %>%
+  mutate(SuV = catWohnen + `catGewerbe, Industrie` + `catsonstige Gebäude- und Freifläche` + `catBetriebsfläche (ohne Abbauland)` + catGrünanlage + `catsonstige Erholungsfläche` + catFriedhof + `catStraße, Weg, Platz` + `catsonstige Verkehrsfläche`)
+
+area_ALKIS <- area_ALKIS %>% 
+  mutate(gewerbeflaeche = cat12100 + cat12200) %>%
+  mutate(cat12000 = gewerbeflaeche + cat12300 + cat12400) %>%
+  mutate(cat18000 = cat18100 + cat18200 + cat18300 + cat18400) %>%
+  mutate(cat31000 = cat31100 + cat31200 + cat31300 + cat31400 + cat31500) %>%
+  mutate(cat10000 = cat11000 + cat12000 + cat13000 + cat14000 + cat15000 + cat16000 + cat17000 + cat18000 + cat19000) %>%
+  mutate(cat20000 = cat21000 + cat22000 + cat23000 + cat24000 + cat25000 + cat26000) %>%
+  mutate(cat30000 = cat31000 + cat32000 + cat33000 + cat34000 + cat35000 + cat36000 + cat37000) %>%
+  mutate(cat40000 = cat41000 + cat42000 + cat43000) %>%
+  mutate(SuV = cat10000 - cat14000 - cat15000 + cat20000)
+
+area15_diff <- area15_ALKIS %>% 
+  inner_join(area15_ADV, by = c("id", "name", "year")) %>%
+  mutate(diff_rel = (cat11000 - catWohnen) / catWohnen * 100) %>%
+  mutate(diff_abs = cat11000 - catWohnen) %>%
+  select(id, name, cat11000, catWohnen, diff_rel, diff_abs)
+
+growth_area_ALKIS <- (area_ALKIS %>% filter(year == mid_year) %>% select(-name, -year)) %>%
+  inner_join(area_ALKIS %>% filter(year == 2016) %>% select(-name, -year), by = "id") %>%
+  calc_delta(cat10000) %>%
+  calc_delta(cat11000) %>%
+  calc_delta(gewerbeflaeche) %>%
+  calc_delta(cat12100) %>%
+  calc_delta(cat12200) %>%
+  calc_delta(cat12300) %>%
+  calc_delta(cat12400) %>%
+  calc_delta(cat13000) %>%
+  calc_delta(cat14000) %>%
+  calc_delta(cat15000) %>%
+  calc_delta(cat16000) %>%
+  calc_delta(cat17000) %>%
+  calc_delta(cat18000) %>%
+  calc_delta(cat19000) %>%
+  calc_delta(cat20000) %>%
+  calc_delta(cat21000) %>%
+  calc_delta(cat22000) %>%
+  calc_delta(cat23000) %>%
+  calc_delta(cat24000) %>%
+  calc_delta(cat25000) %>%
+  calc_delta(cat26000) %>%
+  # calc_delta(verkehrsflaeche)
+  calc_delta(cat30000) %>%
+  calc_delta(cat31000) %>%
+  calc_delta(cat31100) %>%
+  calc_delta(cat31200) %>%
+  calc_delta(cat31300) %>%
+  calc_delta(cat31400) %>%
+  calc_delta(cat31500) %>%
+  calc_delta(cat32000) %>%
+  calc_delta(cat33000) %>%
+  calc_delta(cat34000) %>%
+  calc_delta(cat35000) %>%
+  calc_delta(cat36000) %>%
+  calc_delta(cat37000) %>%
+  calc_delta(cat40000) %>%
+  calc_delta(SuV)
+  
+
+growth_area_ADV <- (area_ADV %>% filter(year == start_year) %>% select(-name, -year)) %>%
+  inner_join(area_ADV %>% filter(year == mid_year) %>% select(-name, -year), by = "id") %>%
+  calc_delta(catWohnen)
+
+growth_area <- growth_area_ALKIS %>% 
+  inner_join(growth_area_ADV, by = c("id")) %>% 
+  inner_join(area15_diff %>% select(id, diff_abs)) %>%
+  mutate(wohnbauflaeche_abs = catWohnen_abs + cat11000_abs) %>%
+  mutate(wohnbauflaeche_rel_a1 = wohnbauflaeche_abs / (catWohnen.x + diff_abs) * 100) %>%
+  mutate(wohnbauflaeche_rel_a2 = wohnbauflaeche_abs / (catWohnen.x) * 100)
+
+growth <- growth_population %>%
+  inner_join(growth_employees) %>%
+  inner_join(growth_area)
+
+growth_mun <- growth %>%
+  arrange(population) %>%
+  filter(municipality) %>%
+  mutate(lkr_id = str_sub(id, 1, 5)) %>%
+  inner_join(population1 %>% rename(lkr_name = name) %>% select(id, lkr_name), by = c("lkr_id" = "id"))
+
+growth_counties <- growth %>%
+  filter(str_length(id) == 5)
+```
+
+
+## Detaillierte Analyse
+
+#### Flächenverbrauch
+
+Die Hauptkomponenten des Flächenverbrauchs sind Wohnbaufläche, gewerblich genutzte Fläche, Fläche gemischter Nutzung und Straßenfläche. Abgebildet ist deren Zuwachs (in ha) in Bayern von 2014 bis 2016: Die Wohnbaufläche ist also in den letzten beiden Jahren mehr als doppelt so stark gewachsen wie gewerblich genutzte Fläche. 
+
+```{r, echo=TRUE}
+values <- growth_area %>% filter(id == "09") %>% select(Wohnbaufläche = cat11000_abs, Gewerbefläche = gewerbeflaeche_abs, Gemischt = cat16000_abs, Straßen = cat21000_abs)
+midpoints <- barplot(as.matrix(values))
+text(midpoints, as.vector(values), as.integer(as.vector(values)), adj = c(0.5,2), col = "white")
+
+write_csv(
+  growth_area %>%
+    filter(id == "09") %>%
+    select(id, Wohnbaufläche = cat11000_abs, Gewerbefläche = gewerbeflaeche_abs, Gemischt = cat16000_abs, Straßen = cat21000_abs),
+  "output/growth_SuV.csv")
+```
+
+#### Wohnbaufläche
+
+
+
+Scatterplot aller Landkreise + Kreisfreie Städte: Wir sehen, dass in den Landkreisen die Wohnbaufläche in den letzten beiden Jahren stärker gewachsen ist (relativ in %) als in den kreisfreien Städten, während die Bevölkerung hier schneller gewachsen (relativ in %). Es gibt keinen positiven Zusammenhang zwischen dem Bevölkerungswachstum und dem Zuwachs an Wohnbaufläche.
+
+```{r, echo=TRUE, eval=TRUE}
+ggplotly(
+  ggplot(data = growth_counties %>% mutate(Gebiet = ifelse(municipality, "Kreisfreie Stadt", "Landkreis"), Wohnbaufläche = cat11000_rel, Bevölkerung = population_rel2), mapping = aes(y = Wohnbaufläche, x = Bevölkerung)) +
+    geom_point(mapping = aes(text = name, color = Gebiet), shape = 1),
+    # geom_smooth(method = "lm"),
+  tooltip = c("all")
+)
+
+write_csv(
+  growth_counties %>%
+    inner_join (population1 %>% select(id, district = name), by = c("bezirk" = "id")) %>%
+    select(id, name, district, population, Wohnbaufläche = cat11000_rel, Bevölkerung = population_rel2, Wohnbaufläche_ha = cat11000_rel, Bevölkerung_ha = population_rel2, municipality) %>%
+    mutate(municipality = ifelse(municipality, "Kreisfreie Stadt", "Landkreis")), "output/growth_counties.csv")
+```
+
+___
+
+Die Wohnbaufläche ist nicht nur der Haupttreiber des Flächenverbrauchs, sie nimmt auch unterschiedlich stark zu:
+
+Aggregiert man Landkreise und kreisfreie Städte so fällt auf: Der Flächenverbrauch (relativ in Prozent) war von 2014 bis 2016 in den Landkreisen beinahe 3x so groß wie in den kreisfreien Städten, während die Bevölkerung (relativ in Prozent) deutlich weniger als in den kreisfreien Städten wächst:    
+
+```{r, echo=TRUE}
+growth_counties %>%
+  mutate(landkreis = !municipality) %>%
+  group_by(landkreis) %>%
+  summarise(
+    Bevölkerung = (sum(population_abs2)) / sum(population.y) * 100,
+    # population_abs2 = (sum(population_abs2)),
+    Wohnbaufläche = (sum(cat11000_abs)) / sum(cat11000.x) * 100
+    # cat11000_abs = (sum(cat11000_abs))
+  ) %>%
+  mutate(name = ifelse(landkreis, "Landkreise", "Kreisfr. Städte")) %>%
+  select(name, Bevölkerung, Wohnbaufläche)
+```
+
+Eine andere mögliche Unterteilung zwischen Stadt und Land ist in Gemeinden mit mehr und weniger als 10000 Einwohnern:
+
+```{r, echo=TRUE}
+growth_mun %>% filter(population > 10000) %>%
+  summarise(
+    name = "<10000",
+    Bevölkerung = (sum(population_abs2)) / sum(population.y) * 100,
+    Wohnbaufläche = (sum(cat11000_abs)) / sum(cat11000.x) * 100
+  ) %>% 
+  mutate(name = ">10000") %>% union(
+    growth_mun %>% filter(population < 10000) %>%
+      summarise(
+        name = "<10000",
+        Bevölkerung = (sum(population_abs2)) / sum(population.y) * 100,
+        Wohnbaufläche = (sum(cat11000_abs)) / sum(cat11000.x) * 100
+      )
+  ) 
+```
+___
+
+Zum Vergleich das relative Wachstum bayernweit in Prozent von 2014 bis 2016:
+
+```{r, echo=TRUE}
+growth_state <- growth %>% filter(id == "09") %>% select(id, name, population_rel, wohnbauflaeche_rel_a1)
+population_rel_state <- (growth_state %>% select(population_rel))[[1]]
+wohnbauflaeche_rel_state <- (growth_state %>% select(wohnbauflaeche_rel_a1))[[1]]
+
+growth_state1 <- growth %>% filter(id == "09") %>% select(id, name, population_rel1, catWohnen_rel)
+population_rel_state1 <- (growth_state1 %>% select(population_rel1))[[1]]
+catWohnen_rel_state1 <- (growth_state1 %>% select(catWohnen_rel))[[1]]
+
+growth_state2 <- growth %>% filter(id == "09") %>% select(name, Bevölkerung = population_rel2, Wohnbaufläche = cat11000_rel)
+population_rel_state2 <- (growth_state2 %>% select(Bevölkerung))[[1]]
+cat11000_rel_state2 <- (growth_state2 %>% select(Wohnbaufläche))[[1]]
+
+growth_state2
+```
+
+___
+
+#### Gewerbeflächen
+
+Gewerblich genutzten Fläche wiederum teilt sich auf in Gewerbe- und Industrie und Handel- und Dienstleistung, wobei letztere hauptverantworlich für den Zuwachs ist. Das ist ein Hinweis darauf, dass sich verstärkt Supermärkte und andere Handelsbetriebe an den Ortsrändern ansiedeln:
+
+```{r, echo=TRUE}
+values <- growth_area %>% filter(id == "09") %>% select(Gewerbe_Industrie = cat12100_abs, Handel_Dienstleistung = cat12200_abs)
+
+midpoints <- barplot(as.matrix(values))
+text(midpoints, as.vector(values), as.integer(as.vector(values)), adj = c(0.5,2), col = "white")
+```
+
+
+
+Die bayerische Industrie- und Handelskammer (IHK) betreibt eine Portal, auf dem Investoren nach Gewerbeflächen suchen können. Die Kommunen stellen hier auf freiwilliger Basis Gewerbeflächen ein, die zum Verkauf stehen.
+
+___
+
+Das von der IHK verzeichnete **Gewerbeflächenpotential** betrug in Bayern Ende 2017: `r round(potential)`ha. Damit ist das Gewerbeflächenpotential ca. `r round(potential / ((growth_area %>% filter(id == "09") %>% select(gewerbeflaeche_abs))[[1]] / 2 / 0.85))`x größer als der jährliche Zuwachs an tatsächlich gewerblich genutzter Fläche (Annahme: Anteil der Straßen in Gewerbegebieten ca. 15 Prozent).
+
+Das *sofortige* Gewerbeflächenpotential enthält nur Flächen, die baurechtlich sofort oder kurzfristig verfügbar und sofort oder kurzfristig erwerbbar sind. Das sofortige Gewerbeflächenpotential betrug in Bayern Ende 2017: `r round(potential_immediate)`ha. Es ist ca. `r round(potential_immediate / ((growth_area %>% filter(id == "09") %>% select(gewerbeflaeche_abs))[[1]] / 2 / 0.85))`x größer als der jährliche Zuwachs an tatsächlich gewerblich genutzter Fläche (Annahme: Anteil der Straßen in Gewerbegebieten 15 Prozent).
+
+
+
+
+#### Landwirtschaft
+
+Ziehen wir die landwirtschaftlich genutzte Fläche in Betracht, sehen wir, dass sie von 2014 bis 2016 in absoluten Zahlen (ha) stärker gesunken ist als die Siedlungs- und Verkehrsfläche (SuV) gestiegen ist. Möglicherweise auch zugunsten der Waldfläche:
+
+```{r, echo=TRUE}
+values <- growth_area_ALKIS %>% filter(id == "09") %>% select(SuV = SuV_abs, Landwirtschaftsfläche = cat31000_abs, Waldfläche = cat32000_abs)
+
+midpoints <- barplot(as.matrix(values))
+text(midpoints, sapply(as.vector(values), function(x) {ifelse(x > 0, x, 0)}), as.integer(as.vector(values)), adj = c(0.5,2), col = "white")
+```
+
+#### Output
+
+```{r}
+
+
+write_csv(
+  growth_counties %>%
+    inner_join (population1 %>% select(id, district = name), by = c("bezirk" = "id")) %>%
+    select(id, name, district, population, population_abs2, population_rel2, cat11000_abs, cat11000_rel, municipality) %>%
+    mutate(municipality = ifelse(municipality, "Kreisfreie Stadt", "Landkreis")), "output/growth_counties.csv")
+```
+
+
+## Ergebnisse zusammengefasst
+
+#### Wohnbaufläche
+
+* **Der eigentliche Treiber im Flächenverbrauch**: Fläche, die wir bewohnen. Die Wohnbaufläche in Bayern wächst sehr viel stärker als etwa Fläche für Straßen oder Gewerbegebiete, die beim Thema Flächenverbrauch unter viel größerer Beobachtung stehen.
+* **Wohnbaufläche wächst v.a. in ländlichen Gebieten**: In den Landkreisen ist der Flächenverbrauch fast drei Mal so hoch wie in den kreisfreien Städten, obwohl das Bevölkerungswachstum nur etwas mehr als halb so groß wie in den Städten ist.
+
+#### Gewerbefläche
+
+* **Gewerbenflächenpotential unverhältnismäßig hoch**: Es wird sehr viel mehr Fläche zur gewerblichen Nutzung angeboten als benötigt. Genauer: Die von den bayerischen Gemeinden angebotenen Gewerbeflächen sind etwa zehn Mal so groß wie die jährliche Zunahme an tatsächlich gewerblich genutzten Flächen.
