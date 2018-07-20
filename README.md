@@ -7,7 +7,7 @@ Das Repository enthält eine Dokumentation unserer Analyse des Flächenverbrauch
 1. Repository klonen `git clone https://...`
 2. `main.Rmd` in RStudio öffnen
 3. Code-Chunks ausführen
-4. `main.html` enthält eine [HTML-Version](https://br-data.github.io/2018-03-das-verbaute-land-analyse/main.html) des gesamten Prozesses
+4. `main.html` enthält eine [HTML-Version](https://br-data.github.io/2018-flaechenverbrauch-analyse/main.html) des gesamten Prozesses
 
 Das Verwenden von package snapshots in `main.Rmd` ist an den [Workflow](https://github.com/grssnbchr/rddj-template) von @grssnbchr angelehnt.
 
